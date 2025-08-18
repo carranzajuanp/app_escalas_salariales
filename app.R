@@ -2,6 +2,7 @@ library(shiny)
 library(dplyr)
 data <- read.csv("dataset.csv", sep = ";", stringsAsFactors = FALSE)
 
+# Renombrar las columnas para que coincidan con los nombres solicitados
 data <- data %>%
   rename(
     Escalafon = escalafon_desc,
@@ -11,9 +12,10 @@ data <- data %>%
     `Salario bruto` = importe_liq
   )
 
+# Cambiar el nombre del escalafón "Superior" a "Autoridades"
 data$Escalafon <- gsub("Superior", "Autoridades", data$Escalafon)
 
-# UI
+# UI de la aplicación Shiny
 ui <- fluidPage(
   tags$head(
     tags$style(HTML("
@@ -78,25 +80,32 @@ ui <- fluidPage(
         padding-top: 10px;
         border-top: 1px dashed #ccc;
       }
+      .update-info {
+        text-align: right;
+        font-size: 0.9em;
+        color: #6c757d;
+        margin-top: 20px;
+      }
     "))
   ),
-
-  titlePanel(div(class = "title", "Escalas Salariales del Personal de la UNC")),
-
+  
+  titlePanel(div(class = "title", "Escalas salariales del personal de la UNC")),
+  
   sidebarLayout(
     sidebarPanel(
       class = "well",
       selectInput(
         inputId = "escalafon",
         label = "Seleccione el Escalafón:",
+        # Asegurarse de que no haya NA en las opciones y el nombre 'Superior' esté cambiado
         choices = c("Seleccione..." = "", unique(na.omit(data$Escalafon))),
         selected = ""
       ),
-      hr(),
-
-      uiOutput("categoria_ui"),
-      hr(),
-
+      hr(), # Separador visual
+      
+      uiOutput("categoria_ui"), # Orden cambiado: Categoría después de Escalafón
+      hr(), # Separador visual
+      
       # Utilizar conditionalPanel para mostrar/ocultar el filtro de Dedicación
       conditionalPanel(
         condition = "input.escalafon != 'No Docente' && input.escalafon != '' && input.categoria != ''", # "No Docente"
@@ -112,28 +121,31 @@ ui <- fluidPage(
         condition = "input.escalafon != 'No Docente' && (input.escalafon == '' || input.categoria == '')", # "No Docente"
         helpText("Por favor, seleccione Escalafón y Categoría primero.")
       ),
-      hr(),
-
+      hr(), # Separador visual
+      
       # Nuevo filtro de Antigüedad, reactivo al escalafón
       uiOutput("antiguedad_ui")
     ),
-
+    
     mainPanel(
       div(class = "output-box",
           h4(class = "output-label", "Información del Salario:"),
           htmlOutput("salario_concepto")
-      )
+      ),
+      # Nuevo elemento para mostrar la fecha de actualización
+      div(class = "update-info", textOutput("info_actualizacion"))
     )
   )
 )
 
-# SERVER
+# Lógica del servidor de la aplicación Shiny
 server <- function(input, output, session) {
-
+  
   # Renderizar el combobox de Categoría dinámicamente
   output$categoria_ui <- renderUI({
+    # Asegurarse de que input$escalafon no sea NULL o NA
     req(input$escalafon)
-
+    
     if (input$escalafon == "") {
       helpText("Por favor, seleccione un Escalafón primero.")
     } else {
@@ -143,7 +155,7 @@ server <- function(input, output, session) {
         pull(Categoria) %>%
         unique() %>%
         na.omit()
-
+      
       # Orden específico para el Escalafón "Docente"
       if (input$escalafon == "Docente") {
         orden_docente <- c("PROFESOR TITULAR", "PROFESOR ASOCIADO", "PROFESOR ADJUNTO", "PROFESOR ASISTENTE", "PROFESOR AYUDANTE A")
@@ -153,7 +165,7 @@ server <- function(input, output, session) {
       } else {
         categorias_disponibles <- sort(categorias_disponibles) # Orden alfabético por defecto
       }
-
+      
       selectInput(
         inputId = "categoria",
         label = "Seleccione la Categoría:",
@@ -162,11 +174,12 @@ server <- function(input, output, session) {
       )
     }
   })
-
+  
   # Renderizar el combobox de Dedicación dinámicamente
   output$dedicacion_ui <- renderUI({
+    # Asegurarse de que input$escalafon y input$categoria no sean NULL o NA
     req(input$escalafon, input$categoria)
-
+    
     # Filtrar las opciones de "Dedicación" según "Escalafón" y "Categoría"
     dedicaciones_disponibles <- data %>%
       filter(Escalafon == input$escalafon,
@@ -175,7 +188,7 @@ server <- function(input, output, session) {
       unique() %>%
       na.omit() %>% # Eliminar NA de las opciones
       sort() # Ordenar alfabéticamente
-
+    
     selectInput(
       inputId = "dedicacion",
       label = "Seleccione la Dedicación:",
@@ -183,11 +196,11 @@ server <- function(input, output, session) {
       selected = ""
     )
   })
-
+  
   # Renderizar el filtro de Antigüedad dinámicamente
   output$antiguedad_ui <- renderUI({
     req(input$escalafon)
-
+    
     if (input$escalafon == "") {
       helpText("Por favor, seleccione un Escalafón primero para definir la Antigüedad.")
     } else if (input$escalafon == "Docente") {
@@ -214,7 +227,7 @@ server <- function(input, output, session) {
         inputId = "antiguedad",
         label = "Seleccione la Antigüedad (años):",
         min = 0,
-        max = 24,
+        max = 24, # Hasta 24 años como límite superior
         value = 0,
         step = 1
       )
@@ -235,22 +248,22 @@ server <- function(input, output, session) {
       helpText("Seleccione un Escalafón para ver las opciones de Antigüedad.")
     }
   })
-
-
+  
+  
   # Mostrar el "Salario bruto" y "Concepto" según las selecciones finales
   output$salario_concepto <- renderUI({
     # Requiere que Escalafón y Categoría estén seleccionados
-    req(input$escalafon, input$categoria, input$antiguedad)
-
+    req(input$escalafon, input$categoria, input$antiguedad) # Antiguedad ahora también es requerida
+    
     if (input$escalafon == "" || input$categoria == "" || input$antiguedad == "") {
       return(HTML("<p>Por favor, complete todas las selecciones para ver la información.</p>"))
     }
-
+    
     # Filtrar el dataset con las selecciones iniciales (Escalafon y Categoria)
     filtered_data_base <- data %>%
       filter(Escalafon == input$escalafon,
              Categoria == input$categoria)
-
+    
     # Si el Escalafón NO es "No Docente", aplicar filtro de Dedicación
     if (input$escalafon != "No Docente") {
       req(input$dedicacion) # Dedicación es requerida si no es No Docente
@@ -263,16 +276,16 @@ server <- function(input, output, session) {
       # Si es No Docente, filtered_data es igual a filtered_data_base (sin filtro de Dedicación)
       filtered_data <- filtered_data_base
     }
-
+    
     # Procesar los datos filtrados
     if (nrow(filtered_data) > 0) {
       # Extraer el salario básico del concepto "Basico"
       basico_row <- filtered_data %>% filter(Concepto == "Basico")
       basico_amount <- ifelse(nrow(basico_row) > 0, basico_row$`Salario bruto`[1], 0) # Tomar el primer básico si hay varios, o 0 si no se encuentra
-
+      
       adicional_antiguedad_amount <- 0
       adicional_antiguedad_concepto <- "Adicional Antigüedad"
-
+      
       # Calcular Adicional Antigüedad según el Escalafón
       if (input$escalafon == "Docente") {
         porcentaje <- switch(input$antiguedad,
@@ -305,46 +318,67 @@ server <- function(input, output, session) {
                              0) # Default a 0 si no coincide
         adicional_antiguedad_amount <- basico_amount * porcentaje
       }
-
+      
       # Obtener los conceptos distintos y sus salarios para la visualización individual
       resultado_distinct <- filtered_data %>%
         distinct(`Salario bruto`, Concepto)
-
+      
       # Crear la fila de antigüedad como un tibble
       antiguedad_df_row <- tibble(
         `Salario bruto` = adicional_antiguedad_amount,
         Concepto = adicional_antiguedad_concepto
       )
-
+      
       # Usar bind_rows para combinar, que es más robusto con data frames vacíos
       all_concepts <- bind_rows(resultado_distinct, antiguedad_df_row)
-
+      
       # Crear una lista de párrafos para cada concepto, formateando como "Concepto: $Valor"
       output_paragraphs <- apply(all_concepts, 1, function(row) {
         salario_formateado_individual <- format(as.numeric(row["Salario bruto"]), big.mark = ".", decimal.mark = ",")
         paste0("<p><strong>", row["Concepto"], ":</strong> $", salario_formateado_individual, "</p>")
       })
-
+      
       final_html <- paste(output_paragraphs, collapse = "")
-
+      
       # Calcular el total del salario bruto final (suma de todos los conceptos, incluyendo antigüedad)
       # Este total se calculará siempre para todos los casos
       total_salario_final <- sum(all_concepts$`Salario bruto`, na.rm = TRUE)
       total_salario_final_formateado <- format(total_salario_final, big.mark = ".", decimal.mark = ",")
-
+      
       # Agregar la línea de "Salario bruto total" al final en todos los casos
       final_html <- paste0(final_html, "<p class='total-line'><strong>Salario bruto total:</strong> $", total_salario_final_formateado, "</p>")
-
+      
       HTML(final_html)
     } else {
       HTML("<p>No se encontraron datos para la combinación seleccionada.</p>")
+    }
+  })
+  
+  # Nuevo output para la información de actualización
+  output$info_actualizacion <- renderText({
+    # Extraer el primer periodo_id de los datos
+    first_periodo_id <- data$periodo_id[1]
+    
+    if (!is.null(first_periodo_id) && !is.na(first_periodo_id) && nchar(first_periodo_id) == 6) {
+      year <- substr(first_periodo_id, 1, 4)
+      month_num <- as.integer(substr(first_periodo_id, 5, 6))
+      
+      # Mapear el número del mes al nombre en español
+      month_names <- c(
+        "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
+        "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+      )
+      month_name <- month_names[month_num]
+      
+      paste0("Información actualizada al mes ", month_name, " de ", year, ".")
+    } else {
+      "Información de fecha no disponible."
     }
   })
 }
 
 # Ejecutar la aplicación
 shinyApp(ui, server)
-
 
 
 
