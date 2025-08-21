@@ -5,7 +5,8 @@ library(shiny)
 library(dplyr)
 library(tibble)
 
-data <- read.csv("dataset.csv", sep = ";", stringsAsFactors = FALSE)
+# Modificación: Cambiar el separador a coma (,)
+data <- read.csv("dataset.csv", sep = ",", stringsAsFactors = FALSE)
 
 data <- data %>%
   rename(
@@ -193,7 +194,7 @@ ui <- fluidPage(
           htmlOutput("salario_concepto")
       ),
       div(class = "disclaimer-text",
-          p( tags$strong("Importante:"),"Las simulaciones realizadas no incluyen las retenciones aplicadas por ", tags$strong("Impuesto a las Ganancias"), ", dado que dependen de las condiciones particulares de cada trabajador. Además, por practicidad se excluyen del cálculo algunos conceptos que no llegan a representar un 1% de los haberes ni de las retenciones. Además, se aclara que los importes aquí expresados pueden variar según casos particulares en donde se abonen garantías salariales, capacitaciones o algunos conceptos excepcionales.")
+          p("Importante: Las simulaciones realizadas no incluyen las retenciones aplicadas por ", tags$strong("Impuesto a las Ganancias"), ", dado que dependen de las condiciones particulares de cada trabajador. Además, por practicidad se excluyen del cálculo algunos conceptos que no llegan a representar un 1% de los haberes ni de las retenciones. Además, se aclara que los importes aquí expresados pueden variar según casos particulares en donde se abonen capacitaciones u otros conceptos excepcionales.")
       )
     )
   )
@@ -379,281 +380,267 @@ server <- function(input, output, session) {
       return(HTML("<p>Por favor, complete todas las selecciones para ver la información.</p>"))
     }
     
-    filtered_data_base <- data %>%
+    temp_filtered_data <- data %>%
       filter(Escalafon == input$escalafon,
              Categoria == input$categoria)
-    
-    filtered_data <- filtered_data_base
     
     if (input$escalafon != "No Docente") {
       if (is.null(input$dedicacion) || input$dedicacion == "") {
         return(HTML("<p>Por favor, seleccione una <strong>Dedicación</strong> para ver los haberes.</p>"))
       }
-      filtered_data <- filtered_data_base %>%
+      temp_filtered_data <- temp_filtered_data %>%
         filter(Dedicacion == input$dedicacion)
-    } else {
-      filtered_data <- filtered_data_base %>%
-        filter(Concepto == "Basico")
     }
     
-    if (nrow(filtered_data) > 0) {
-      all_positive_concepts_df <- tibble(`Salario bruto` = numeric(), Concepto = character())
-      
-      basico_row <- filtered_data %>% filter(Concepto == "Basico")
-      basico_amount <- ifelse(nrow(basico_row) > 0, basico_row$`Salario bruto`[1], 0)
-      
-      basico_categ7_nodocente <- data %>%
-        filter(Escalafon == "No Docente", Categoria == "Categ 7 Esc. 366/06", Concepto == "Basico") %>%
-        pull(`Salario bruto`)
-      basico_categ7_nodocente_amount <- ifelse(length(basico_categ7_nodocente) > 0, basico_categ7_nodocente[1], 0)
-      
-      
-      if (basico_amount > 0) {
-        all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = basico_amount, Concepto = "Basico"))
+    if (nrow(temp_filtered_data) == 0) {
+      return(HTML("<p>No se encontraron datos para la combinación seleccionada.</p>"))
+    }
+    
+    basico_amount_row <- temp_filtered_data %>% filter(Concepto == "Basico")
+    basico_amount <- ifelse(nrow(basico_amount_row) > 0, basico_amount_row$`Salario bruto`[1], 0)
+    
+    bruto_garantizado_amount_row <- temp_filtered_data %>% filter(Concepto == "Bruto Garantizado")
+    bruto_garantizado_amount <- ifelse(nrow(bruto_garantizado_amount_row) > 0, bruto_garantizado_amount_row$`Salario bruto`[1], 0)
+    
+    all_positive_concepts_df <- tibble(`Salario bruto` = numeric(), Concepto = character())
+    if (basico_amount > 0) {
+      all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = basico_amount, Concepto = "Basico"))
+    }
+    
+    adicional_antiguedad_amount <- 0
+    if (input$escalafon == "Docente") {
+      porcentaje <- switch(input$antiguedad,
+                           "0 a 4 años" = 0.20, "5 a 6 años" = 0.30, "7 a 9 años" = 0.40,
+                           "10 a 11 años" = 0.50, "12 a 14 años" = 0.60, "15 a 16 años" = 0.70,
+                           "17 a 19 años" = 0.80, "20 a 21 años" = 1.00, "22 a 23 años" = 1.10,
+                           "+24 años" = 1.20, 0)
+      adicional_antiguedad_amount <- basico_amount * porcentaje
+    } else if (input$escalafon == "No Docente") {
+      years_nodocente <- as.numeric(input$antiguedad)
+      if (years_nodocente > 0) {
+        adicional_antiguedad_amount <- basico_amount * ((1 + 0.02)^years_nodocente - 1)
+      } else {
+        adicional_antiguedad_amount <- 0
       }
+    } else if (input$escalafon == "Autoridades") {
+      porcentaje <- switch(input$antiguedad,
+                           "0 a 19 años" = 0.80, "20 a 21 años" = 1.00, "22 a 23 años" = 1.10,
+                           "+24 años" = 1.20, 0)
+      adicional_antiguedad_amount <- basico_amount * porcentaje
+    }
+    if (adicional_antiguedad_amount > 0) {
+      all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_antiguedad_amount, Concepto = "Adicional Antigüedad"))
+    }
+    
+    if (!is.null(input$formacion_academica) && length(input$formacion_academica) > 0) {
+      adicional_formacion_academica_amount <- 0
+      selected_formacion_level <- ""
       
-      adicional_antiguedad_amount <- 0
-      adicional_antiguedad_concepto <- "Adicional Antigüedad"
-      
-      if (input$escalafon == "Docente") {
-        porcentaje <- switch(input$antiguedad,
-                             "0 a 4 años" = 0.20,
-                             "5 a 6 años" = 0.30,
-                             "7 a 9 años" = 0.40,
-                             "10 a 11 años" = 0.50,
-                             "12 a 14 años" = 0.60,
-                             "15 a 16 años" = 0.70,
-                             "17 a 19 años" = 0.80,
-                             "20 a 21 años" = 1.00,
-                             "22 a 23 años" = 1.10,
-                             "+24 años" = 1.20,
-                             0)
-        adicional_antiguedad_amount <- basico_amount * porcentaje
-      } else if (input$escalafon == "No Docente") {
-        years_nodocente <- as.numeric(input$antiguedad)
-        if (years_nodocente > 0) {
-          adicional_antiguedad_amount <- basico_amount * ((1 + 0.02)^years_nodocente - 1)
-        } else {
-          adicional_antiguedad_amount <- 0
-        }
-      } else if (input$escalafon == "Autoridades") {
-        porcentaje <- switch(input$antiguedad,
-                             "0 a 19 años" = 0.80,
-                             "20 a 21 años" = 1.00,
-                             "22 a 23 años" = 1.10,
-                             "+24 años" = 1.20,
-                             0)
-        adicional_antiguedad_amount <- basico_amount * porcentaje
-      }
-      
-      if (adicional_antiguedad_amount > 0) {
-        all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_antiguedad_amount, Concepto = adicional_antiguedad_concepto))
-      }
-      
-      if (!is.null(input$formacion_academica) && length(input$formacion_academica) > 0) {
-        adicional_formacion_academica_amount <- 0
-        selected_formacion_level <- ""
-        
-        if (input$escalafon == "Docente" || input$escalafon == "Autoridades") {
-          priority_order <- c("Doctorado", "Maestría", "Especialización")
-          
-          for (level in priority_order) {
-            if (level %in% input$formacion_academica) {
-              selected_formacion_level <- level
-              break
-            }
+      if (input$escalafon == "Docente" || input$escalafon == "Autoridades") {
+        priority_order <- c("Doctorado", "Maestría", "Especialización")
+        for (level in priority_order) {
+          if (level %in% input$formacion_academica) {
+            selected_formacion_level <- level
+            break
           }
+        }
+        if (selected_formacion_level != "") {
+          porcentaje_formacion <- switch(selected_formacion_level,
+                                         "Doctorado" = 0.18, "Maestría" = 0.08, "Especialización" = 0.05, 0)
+          adicional_formacion_academica_amount <- basico_amount * porcentaje_formacion
+        }
+      } else if (input$escalafon == "No Docente") {
+        priority_order <- c("Posgrado", "Grado", "Tecnicatura en Gestión Universitaria", "Secundario")
+        for (level in priority_order) {
+          if (level %in% input$formacion_academica) {
+            selected_formacion_level <- level
+            break
+          }
+        }
+        if (selected_formacion_level != "") {
+          porcentaje_formacion <- switch(selected_formacion_level,
+                                         "Posgrado" = 0.30, "Grado" = 0.25, "Tecnicatura en Gestión Universitaria" = 0.20,
+                                         "Secundario" = 0.175, 0)
+          basico_categ7_nodocente <- data %>%
+            filter(Escalafon == "No Docente", Categoria == "Categ 7 Esc. 366/06", Concepto == "Basico") %>%
+            pull(`Salario bruto`)
+          basico_categ7_nodocente_amount <- ifelse(length(basico_categ7_nodocente) > 0, basico_categ7_nodocente[1], 0)
           
-          if (selected_formacion_level != "") {
-            porcentaje_formacion <- switch(selected_formacion_level,
-                                           "Doctorado" = 0.18,
-                                           "Maestría" = 0.08,
-                                           "Especialización" = 0.05,
-                                           0)
+          if (selected_formacion_level == "Secundario") {
+            adicional_formacion_academica_amount <- basico_categ7_nodocente_amount * porcentaje_formacion
+          } else {
             adicional_formacion_academica_amount <- basico_amount * porcentaje_formacion
           }
-          
-        } else if (input$escalafon == "No Docente") {
-          priority_order <- c("Posgrado", "Grado", "Tecnicatura en Gestión Universitaria", "Secundario")
-          
-          for (level in priority_order) {
-            if (level %in% input$formacion_academica) {
-              selected_formacion_level <- level
-              break
-            }
-          }
-          
-          if (selected_formacion_level != "") {
-            porcentaje_formacion <- switch(selected_formacion_level,
-                                           "Posgrado" = 0.30,
-                                           "Grado" = 0.25,
-                                           "Tecnicatura en Gestión Universitaria" = 0.20,
-                                           "Secundario" = 0.175,
-                                           0)
-            
-            if (selected_formacion_level == "Secundario") {
-              adicional_formacion_academica_amount <- basico_categ7_nodocente_amount * porcentaje_formacion
-            } else {
-              adicional_formacion_academica_amount <- basico_amount * porcentaje_formacion
-            }
-          }
-        }
-        
-        if (adicional_formacion_academica_amount > 0) {
-          all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_formacion_academica_amount, Concepto = "Adicional Formacion Academica"))
         }
       }
+      if (adicional_formacion_academica_amount > 0) {
+        all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_formacion_academica_amount, Concepto = "Adicional Formacion Academica"))
+      }
+    }
+    
+    if (input$escalafon == "No Docente") {
+      req(input$permanencia_categoria)
+      permanencia_years <- as.numeric(input$permanencia_categoria)
+      adicional_permanencia_amount <- 0
       
-      if (input$escalafon == "No Docente") {
-        req(input$permanencia_categoria)
-        permanencia_years <- as.numeric(input$permanencia_categoria)
+      current_antiguedad_val <- as.numeric(input$antiguedad)
+      if (!is.na(current_antiguedad_val) && permanencia_years > current_antiguedad_val) {
         adicional_permanencia_amount <- 0
-        
-        current_antiguedad_val <- as.numeric(input$antiguedad)
-        if (!is.na(current_antiguedad_val) && permanencia_years > current_antiguedad_val) {
-          adicional_permanencia_amount <- 0
+      } else {
+        porcentaje_permanencia <- 0
+        if (permanencia_years >= 2 && permanencia_years < 4) {
+          porcentaje_permanencia <- 0.10
+        } else if (permanencia_years >= 4 && permanencia_years < 6) {
+          porcentaje_permanencia <- 0.25
+        } else if (permanencia_years >= 6 && permanencia_years < 8) {
+          porcentaje_permanencia <- 0.45
+        } else if (permanencia_years >= 8) {
+          porcentaje_permanencia <- 0.70
         } else {
           porcentaje_permanencia <- 0
-          if (permanencia_years >= 2 && permanencia_years < 4) {
-            porcentaje_permanencia <- 0.10
-          } else if (permanencia_years >= 4 && permanencia_years < 6) {
-            porcentaje_permanencia <- 0.25
-          } else if (permanencia_years >= 6 && permanencia_years < 8) {
-            porcentaje_permanencia <- 0.45
-          } else if (permanencia_years >= 8) {
-            porcentaje_permanencia <- 0.70
-          } else {
-            porcentaje_permanencia <- 0
-          }
-          
-          base_for_permanence_calc <- 0
-          if (input$categoria == "Categ 1 Esc. 366/06") {
-            base_for_permanence_calc <- basico_amount * 0.37
-          } else {
-            current_category_selected <- input$categoria
-            superior_basic_amount <- get_superior_category_basic_salary(current_category_selected, no_docente_basic_salaries_map, no_docente_category_order_by_basic_asc)
-            base_for_permanence_calc <- superior_basic_amount - basico_amount
-            
-            if (base_for_permanence_calc < 0) {
-              base_for_permanence_calc <- 0
-            }
-          }
-          
-          adicional_permanencia_amount <- base_for_permanence_calc * porcentaje_permanencia
         }
         
-        if (adicional_permanencia_amount > 0) {
-          all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_permanencia_amount, Concepto = "Adicional por Permanencia en Categoría"))
-        }
-      }
-      
-      if (input$escalafon == "No Docente") {
-        req(input$agrupamiento)
-        if (input$agrupamiento == "Asistencial") {
-          adicional_tarea_asistencial_amount <- basico_amount * 0.12
-          suplemento_riesgo_amount <- basico_amount * 0.10
+        base_for_permanence_calc <- 0
+        if (input$categoria == "Categ 1 Esc. 366/06") {
+          base_for_permanence_calc <- basico_amount * 0.37
+        } else {
+          current_category_selected <- input$categoria
+          superior_basic_amount <- get_superior_category_basic_salary(current_category_selected, no_docente_basic_salaries_map, no_docente_category_order_by_basic_asc)
+          base_for_permanence_calc <- superior_basic_amount - basico_amount
           
-          if (adicional_tarea_asistencial_amount > 0) {
-            all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_tarea_asistencial_amount, Concepto = "Adicional por Tarea Asistencial"))
-          }
-          if (suplemento_riesgo_amount > 0) {
-            all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = suplemento_riesgo_amount, Concepto = "Suplemento por Riesgo"))
+          if (base_for_permanence_calc < 0) {
+            base_for_permanence_calc <- 0
           }
         }
-      }
-      
-      
-      excluded_concepts <- c("Basico", "Adicional Antiguedad", "Adicional Formacion Academica",
-                             "Adicional por Permanencia en Categoría", "Adicional por Tarea Asistencial", "Suplemento por Riesgo")
-      
-      other_concepts_df <- filtered_data %>%
-        filter(!Concepto %in% excluded_concepts) %>%
-        distinct(`Salario bruto`, Concepto)
-      
-      all_positive_concepts_df <- bind_rows(all_positive_concepts_df, other_concepts_df)
-      
-      current_html_output <- ""
-      salario_bruto_calculado <- 0
-      
-      desired_order_concepts <- c(
-        "Basico",
-        "Adicional Antiguedad",
-        "Adicional Formacion Academica",
-        "Adicional por Permanencia en Categoría",
-        "Adicional por Tarea Asistencial",
-        "Suplemento por Riesgo"
-      )
-      
-      for (concept_name in desired_order_concepts) {
-        if (concept_name %in% all_positive_concepts_df$Concepto) {
-          monto <- all_positive_concepts_df %>% filter(Concepto == concept_name) %>% pull(`Salario bruto`)
-          salario_bruto_calculado <- salario_bruto_calculado + monto
-          monto_formateado <- format(monto, big.mark = ".", decimal.mark = ",")
-          current_html_output <- paste0(current_html_output, "<p><strong>", concept_name, ":</strong> $", monto_formateado, "</p>")
-        }
-      }
-      
-      remaining_concepts <- all_positive_concepts_df %>%
-        filter(!Concepto %in% desired_order_concepts)
-      
-      if (nrow(remaining_concepts) > 0) {
-        remaining_concepts_ordered <- remaining_concepts %>%
-          arrange(Concepto)
-        for (i in 1:nrow(remaining_concepts_ordered)) {
-          monto <- remaining_concepts_ordered$`Salario bruto`[i]
-          concepto_name <- remaining_concepts_ordered$Concepto[i]
-          salario_bruto_calculado <- salario_bruto_calculado + monto
-          monto_formateado <- format(monto, big.mark = ".", decimal.mark = ",")
-          current_html_output <- paste0(current_html_output, "<p><strong>", concepto_name, ":</strong> $", monto_formateado, "</p>")
-        }
-      }
-      
-      salario_bruto_formateado <- format(salario_bruto_calculado, big.mark = ".", decimal.mark = ",")
-      current_html_output <- paste0(current_html_output, "<p class='total-line'><strong>Salario Bruto:</strong> $", salario_bruto_formateado, "</p>")
-      
-      salario_neto_calculado <- salario_bruto_calculado
-      
-      retenciones_specs <- NULL
-      
-      if (input$escalafon == "Docente") {
-        retenciones_specs <- list(
-          list(concepto = "Fondo Adicional Univ.", porcentaje = 0.02),
-          list(concepto = "Jubilación (régimen especial)", porcentaje = 0.11),
-          list(concepto = "Caja complementaria", porcentaje = 0.045),
-          list(concepto = "Ley 19032", porcentaje = 0.03),
-          list(concepto = "Obra social (DASPU)", porcentaje = 0.03)
-        )
-      } else if (input$escalafon == "No Docente" || input$escalafon == "Autoridades") {
-        retenciones_specs <- list(
-          list(concepto = "Fondo Adicional Univ.", porcentaje = 0.02),
-          list(concepto = "Jubilación", porcentaje = 0.11),
-          list(concepto = "Caja complementaria", porcentaje = 0.045),
-          list(concepto = "Ley 19032", porcentaje = 0.03),
-          list(concepto = "Obra social (DASPU)", porcentaje = 0.03)
-        )
-      }
-      
-      
-      if (!is.null(retenciones_specs)) {
-        current_html_output <- paste0(current_html_output, "<div class='section-divider-blue'></div>")
-        current_html_output <- paste0(current_html_output, "<p class='section-title'>Retenciones:</p>")
         
-        for (retencion in retenciones_specs) {
-          monto_retencion <- salario_bruto_calculado * retencion$porcentaje
-          salario_neto_calculado <- salario_neto_calculado - monto_retencion
-          monto_formateado <- format(monto_retencion, big.mark = ".", decimal.mark = ",")
-          current_html_output <- paste0(current_html_output, "<p><strong>", retencion$concepto, ":</strong> $", monto_formateado, "</p>")
-        }
+        adicional_permanencia_amount <- base_for_permanence_calc * porcentaje_permanencia
       }
       
-      salario_neto_formateado <- format(salario_neto_calculado, big.mark = ".", decimal.mark = ",")
-      current_html_output <- paste0(current_html_output, "<p class='net-salary-line'><strong>Salario Neto (de bolsillo):</strong> $", salario_neto_formateado, "</p>")
-      
-      HTML(current_html_output)
-      
-    } else {
-      HTML("<p>No se encontraron datos para la combinación seleccionada.</p>")
+      if (adicional_permanencia_amount > 0) {
+        all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_permanencia_amount, Concepto = "Adicional por Permanencia en Categoría"))
+      }
     }
+    
+    if (input$escalafon == "No Docente") {
+      req(input$agrupamiento)
+      if (input$agrupamiento == "Asistencial") {
+        adicional_tarea_asistencial_amount <- basico_amount * 0.12
+        suplemento_riesgo_amount <- basico_amount * 0.10
+        
+        if (adicional_tarea_asistencial_amount > 0) {
+          all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = adicional_tarea_asistencial_amount, Concepto = "Adicional por Tarea Asistencial"))
+        }
+        if (suplemento_riesgo_amount > 0) {
+          all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = suplemento_riesgo_amount, Concepto = "Suplemento por Riesgo"))
+        }
+      }
+    }
+    
+    
+    excluded_concepts <- c("Basico", "Adicional Antiguedad", "Adicional Formacion Academica",
+                           "Adicional por Permanencia en Categoría", "Adicional por Tarea Asistencial", "Suplemento por Riesgo", "Bruto Garantizado")
+    
+    other_concepts_df <- temp_filtered_data %>%
+      filter(!Concepto %in% excluded_concepts) %>%
+      distinct(`Salario bruto`, Concepto)
+    
+    all_positive_concepts_df <- bind_rows(all_positive_concepts_df, other_concepts_df)
+    
+    current_salario_bruto_sum_before_guarantee <- sum(all_positive_concepts_df$`Salario bruto`)
+    
+    garantia_salarial_amount <- 0
+    if (bruto_garantizado_amount > 0 && current_salario_bruto_sum_before_guarantee < bruto_garantizado_amount) {
+      garantia_salarial_amount <- bruto_garantizado_amount - current_salario_bruto_sum_before_guarantee
+      all_positive_concepts_df <- bind_rows(all_positive_concepts_df, tibble(`Salario bruto` = garantia_salarial_amount, Concepto = "Garantía Salarial"))
+    }
+    
+    salario_bruto_calculado <- sum(all_positive_concepts_df$`Salario bruto`)
+    
+    current_html_output <- ""
+    
+    desired_order_concepts <- c(
+      "Basico",
+      "Adicional Antiguedad",
+      "Adicional Formacion Academica",
+      "Adicional por Permanencia en Categoría",
+      "Adicional por Tarea Asistencial",
+      "Suplemento por Riesgo",
+      "Garantía Salarial"
+    )
+    
+    for (concept_name in desired_order_concepts) {
+      if (concept_name %in% all_positive_concepts_df$Concepto) {
+        monto <- all_positive_concepts_df %>% filter(Concepto == concept_name) %>% pull(`Salario bruto`)
+        monto_formateado <- format(monto, big.mark = ".", decimal.mark = ",")
+        current_html_output <- paste0(current_html_output, "<p><strong>", concept_name, ":</strong> $", monto_formateado, "</p>")
+      }
+    }
+    
+    remaining_concepts <- all_positive_concepts_df %>%
+      filter(!Concepto %in% desired_order_concepts)
+    
+    if (nrow(remaining_concepts) > 0) {
+      remaining_concepts_ordered <- remaining_concepts %>%
+        arrange(Concepto)
+      for (i in 1:nrow(remaining_concepts_ordered)) {
+        monto <- remaining_concepts_ordered$`Salario bruto`[i]
+        concepto_name <- remaining_concepts_ordered$Concepto[i]
+        monto_formateado <- format(monto, big.mark = ".", decimal.mark = ",")
+        current_html_output <- paste0(current_html_output, "<p><strong>", concepto_name, ":</strong> $", monto_formateado, "</p>")
+      }
+    }
+    
+    salario_bruto_formateado <- format(salario_bruto_calculado, big.mark = ".", decimal.mark = ",")
+    current_html_output <- paste0(current_html_output, "<p class='total-line'><strong>Salario Bruto:</strong> $", salario_bruto_formateado, "</p>")
+    
+    # Determine the base for retention calculations
+    base_for_retentions <- salario_bruto_calculado # Default to final gross salary
+    
+    if (input$escalafon == "No Docente") {
+      # For No Docente, retentions are calculated WITHOUT the "Garantía Salarial"
+      base_for_retentions <- current_salario_bruto_sum_before_guarantee
+    }
+    
+    salario_neto_calculado_temp <- base_for_retentions
+    
+    retenciones_specs <- NULL
+    
+    if (input$escalafon == "Docente") {
+      retenciones_specs <- list(
+        list(concepto = "Fondo Adicional Univ.", porcentaje = 0.02),
+        list(concepto = "Jubilación (régimen especial)", porcentaje = 0.11),
+        list(concepto = "Caja complementaria", porcentaje = 0.045),
+        list(concepto = "Ley 19032", porcentaje = 0.03),
+        list(concepto = "Obra social (DASPU)", porcentaje = 0.03)
+      )
+    } else if (input$escalafon == "No Docente" || input$escalafon == "Autoridades") {
+      retenciones_specs <- list(
+        list(concepto = "Fondo Adicional Univ.", porcentaje = 0.02),
+        list(concepto = "Jubilación", porcentaje = 0.11),
+        list(concepto = "Caja complementaria", porcentaje = 0.045),
+        list(concepto = "Ley 19032", porcentaje = 0.03),
+        list(concepto = "Obra social (DASPU)", porcentaje = 0.03)
+      )
+    }
+    
+    
+    if (!is.null(retenciones_specs)) {
+      current_html_output <- paste0(current_html_output, "<div class='section-divider-blue'></div>")
+      current_html_output <- paste0(current_html_output, "<p class='section-title'>Retenciones:</p>")
+      
+      for (retencion in retenciones_specs) {
+        monto_retencion <- base_for_retentions * retencion$porcentaje
+        salario_neto_calculado_temp <- salario_neto_calculado_temp - monto_retencion
+        monto_formateado <- format(monto_retencion, big.mark = ".", decimal.mark = ",")
+        current_html_output <- paste0(current_html_output, "<p><strong>", retencion$concepto, ":</strong> $", monto_formateado, "</p>")
+      }
+    }
+    
+    salario_neto_calculado <- salario_neto_calculado_temp # Update final net salary
+    salario_neto_formateado <- format(salario_neto_calculado, big.mark = ".", decimal.mark = ",")
+    current_html_output <- paste0(current_html_output, "<p class='net-salary-line'><strong>Salario Neto (de bolsillo):</strong> $", salario_neto_formateado, "</p>")
+    
+    HTML(current_html_output)
   })
   
   output$info_actualizacion <- renderText({
@@ -677,4 +664,5 @@ server <- function(input, output, session) {
 }
 
 shinyApp(ui, server)
+
 
